@@ -79,17 +79,15 @@ class API(
             "x-line-application": self.APP_NAME,
             "x-le": self.le,
             "x-lap": "5",
-            # "x-lc": "3",
-            # "X-LST": "",
-            # "X-LCR": "",
-            # "X-LOR": "",
             "x-lpv": "1",
             "x-lcs": self._encryptKey,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/87.0.4280.88 Safari/537.36",
+            "User-Agent": self.LineUserAgent,
             "content-type": "application/x-thrift; protocol=TBINARY",
             "x-lal": self.LINE_LANGUAGE,
             "x-lhm": "POST",
+            "X-Line-Chrome-Version": "3.1.0",
         }
+        self.log(f"Use User-Agent: {self.USER_AGENT}")
         if forwardedIp is not None:
             self.server.Headers["X-Forwarded-For"] = forwardedIp
         self.authToken = None
@@ -185,7 +183,7 @@ class API(
             "keynm": keynm,
             "encData": crypto,
             "secret": _secret,
-            "deviceName": self.SYSTEM_NAME,
+            "deviceName": self.SYSTEM_MODEL,
             "calledName": "loginZ",
         }
         if not e2ee:
@@ -251,7 +249,7 @@ class API(
         )
         try:
             res = self.loginV2(
-                keynm, crypto, _secret, deviceName=self.SYSTEM_NAME, cert=certificate
+                keynm, crypto, _secret, deviceName=self.SYSTEM_MODEL, cert=certificate
             )
         except LineServiceException as e:
             if e.code == 89:
@@ -333,7 +331,7 @@ class API(
                 yield f"請輸入pincode: {c}"
                 self.checkPinCodeVerified(sqr)
             try:
-                e = self.qrCodeLoginV2(sqr, self.APP_TYPE, self.SYSTEM_NAME, True)
+                e = self.qrCodeLoginV2(sqr, self.MODEL_NAME, self.USERDOMAIN, False)
                 cert = self.checkAndGetValue(e, 1)
                 self.saveSqrCert(cert)
                 tokenV3Info = self.checkAndGetValue(e, 3)
@@ -350,6 +348,9 @@ class API(
                     self.authToken = authToken
                 yield authToken
             except LineServiceException as e:
+                if e.code == 100:
+                    # BANNED.
+                    raise e
                 print(e)
                 yield "try using requestSQR()..."
                 for _ in self.requestSQR(isSelf):
@@ -383,7 +384,7 @@ class API(
                 c = self.createPinCode(sqr)
                 yield f"請輸入pincode: {c}"
                 self.checkPinCodeVerified(sqr)
-            e = self.qrCodeLoginV2ForSecure(sqr, self.APP_TYPE, self.SYSTEM_NAME, nonce)
+            e = self.qrCodeLoginV2ForSecure(sqr, self.MODEL_NAME, self.USERDOMAIN, nonce)
             self.log(e, log4Debug)
             cert = self.checkAndGetValue(e, 'certificate', 1)
             self.saveSqrCert(cert)
@@ -403,9 +404,10 @@ class API(
         raise Exception("can not check qr code, try again?")
 
     def createSession(self):
+        """Create SQR session."""
         params = []
-        sqrd = self.generateDummyProtocol("createSession", params, 3)
-        return self.postPackDataAndGetUnpackRespData("/acct/lgn/sq/v1", sqrd, 3)
+        sqrd = self.generateDummyProtocol("createSession", params, 4)
+        return self.postPackDataAndGetUnpackRespData("/acct/lgn/sq/v1", sqrd, 4)
 
     def createQrCode(self, qrcode):
         params = [[12, 1, [[11, 1, qrcode]]]]

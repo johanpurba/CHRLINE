@@ -2,6 +2,8 @@
 import json
 import time
 import os
+from urllib import request
+from urllib.parse import urlparse
 import qrcode
 import re
 import requests
@@ -30,7 +32,7 @@ class Helpers(object, metaclass=abc.ABCMeta):
     def sendLiff(
         self,
         to,
-        messages_,
+        messages,
         tryConsent=True,
         forceIssue=False,
         liffId="1562242036-RW04okm",
@@ -51,13 +53,13 @@ class Helpers(object, metaclass=abc.ABCMeta):
                     consentUrl = self.checkAndGetValue(consentRequired, "consentUrl", 2)
                     toType = self.getToType(to)
                     hasConsent = False
-                    if toType == 4:
+                    if toType == 4 or self.APP_TYPE in ['DESKTOPWIN']:
                         hasConsent = self.tryConsentAuthorize(consentUrl)
                     else:
                         hasConsent = self.tryConsentLiff(channelId)
                     if hasConsent:
                         return self.sendLiff(
-                            to, messages_, tryConsent=False, liffId=liffId
+                            to, messages, tryConsent=False, liffId=liffId
                         )
                 raise Exception(f"Failed to send Liff: {to}")
             except Exception as e:
@@ -76,10 +78,10 @@ class Helpers(object, metaclass=abc.ABCMeta):
             "X-Requested-With": "jp.naver.line.android",
         }
         liff_headers["authorization"] = "Bearer %s" % (token)
-        if type(messages_) == list:
-            messages = {"messages": messages_}
+        if type(messages) == list:
+            messages = {"messages": messages}
         else:
-            messages = {"messages": [messages_]}
+            messages = {"messages": [messages]}
         resp = self.server.postContent(
             "https://api.line.me/message/v3/share",
             headers=liff_headers,
@@ -88,7 +90,7 @@ class Helpers(object, metaclass=abc.ABCMeta):
         if resp.status_code == 200:
             self.liff_token_cache[cache_key] = token
         elif use_cache:
-            return self.sendLiff(to, messages_, False, True, liffId)
+            return self.sendLiff(to, messages, False, True, liffId)
         return resp.text
 
     def tryConsentLiff(self, channelId, on=None, referer=None):
@@ -124,13 +126,18 @@ class Helpers(object, metaclass=abc.ABCMeta):
             approvedPermission = ["P", "CM"]
         CHANNEL_ID = None
         CSRF_TOKEN = None
-        session = requests.Session()
+        session = requests.session()
         hr = {
-            "X-LINE-Access": self.authToken,
-            "User-Agent": "Mozilla/5.0 (Linux; Android 8.0.1; SAMSUNG Realise/DeachSword; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/56.0.2924.87 Mobile Safari/537.36",
+            "X-Line-Access": self.authToken,
+            "User-Agent": f"Mozilla/5.0 (Linux; Android 8.0.1; SAMSUNG Realise/DeachSword; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/56.0.2924.87 Mobile Safari/537.36",
             "X-Line-Application": self.APP_NAME,
         }
+        if self.APP_TYPE == "IOS":
+            hr[
+                "User-Agent"
+            ] = f"Mozilla/5.0 (iPhone; CPU iPhone OS {self.SYSTEM_VER} like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Safari Line/{self.APP_VER}"
         r = session.get(consentUrl, headers=hr)
+        print(r.text)
         if r.status_code == 200:
             resp = r.text
             # GET CSRF TOKEN
@@ -140,13 +147,19 @@ class Helpers(object, metaclass=abc.ABCMeta):
             self.log(f"CSRF_TOKEN: {CSRF_TOKEN}")
         if CHANNEL_ID and CSRF_TOKEN:
             url = "https://access.line.me/oauth2/v2.1/authorize/consent"
+            patch_url = urlparse(consentUrl)._replace(query="").geturl()
+            if url != patch_url:
+                self.log(f"Using `{patch_url}` to authorize...")
+                url = patch_url
             payload = {
                 "allPermission": allPermission,
                 "approvedPermission": allPermission,
                 "channelId": CHANNEL_ID,
                 "__csrf": CSRF_TOKEN,
                 "__WLS": "",
-                "allow": True,
+                "addFriendMode": "ALREADY_FRIENDED_MODE",
+                "addFriend": "true",
+                "allow": "true",
             }
             r = session.post(url, data=payload, headers=hr)
             if r.status_code == 200:

@@ -50,6 +50,7 @@ class CHRLINE(
         useThrift: bool = False,
         forceTMCP: bool = False,
         savePath: str = None,
+        os_model: str = None
     ):
         r"""
         Line client for CHRLINE.
@@ -90,6 +91,8 @@ class CHRLINE(
             It will force the use of TMoreCompact protocol on TalkService.
         savePath: `str`
             Set base-save dir path.
+        os_model: `str`
+            Set System model name.
         """
         if device == "CHROMEOS" and version is None:
             raise ValueError(
@@ -100,7 +103,7 @@ class CHRLINE(
         self.customDataId = customDataId
         Models.__init__(self, savePath)
         Config.__init__(self, device)
-        self.initAppConfig(device, version, os_name, os_version)
+        self.initAppConfig(device, version, os_name, os_version, os_model)
         API.__init__(self, forwardedIp)
         Thrift.__init__(self)
         self.is_login = False

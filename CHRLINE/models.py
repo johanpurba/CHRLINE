@@ -418,7 +418,7 @@ class Models(object):
         ptype = "TBINARY" if ttype == 3 else "TCOMPACT"
         if ttype in [1, 2, 3, 4, 5]:
             headers["content-type"] = "application/x-thrift; protocol=" + ptype
-            headers["accept"] = "application/x-thrift"
+            # headers["accept"] = "application/x-thrift"
             if isinstance(bdata, DummyProtocolSerializer):
                 # Import DummyProtocolSerializer in v2.5.3,
                 # it can be change the protocol type.
@@ -444,7 +444,7 @@ class Models(object):
         if self.DEVICE_TYPE == "CHROMEOS":
             headers[
                 "origin"
-            ] = "chrome-extension://CHRLINE-v2.5.0-rc-will-not-be-released"
+            ] = "chrome-extension://ophjlpahpchlmihnnnihgmmeilfjmjjc"
         data = bdata
         if type(data) in [DummyProtocolSerializer, list]:
             data = bdata = bytes(bdata)

@@ -8,10 +8,14 @@ import hashlib
 import json
 import os
 import base64
+from typing import Any, Optional, Union
 import axolotl_curve25519 as Curve25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives import hashes, hmac
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad, unpad
+import secrets
 
 from .exceptions import LineServiceException
 
@@ -144,6 +148,14 @@ class E2EE:
     def _encryptAESECB(self, aes_key, plain_data):
         aes = AES.new(aes_key, AES.MODE_ECB)
         return aes.encrypt(plain_data)
+        
+    def _encryptAESCTR(self, aes_key, nonce, data):
+        aes = AES.new(aes_key, AES.MODE_CTR, nonce=nonce)
+        return aes.encrypt(data)
+        
+    def _decryptAESCTR(self, aes_key, nonce, data):
+        aes = AES.new(aes_key, AES.MODE_CTR, nonce=nonce)
+        return aes.decrypt(data)
 
     def decryptKeyChain(self, publicKey, privateKey, encryptedKeyChain):
         shared_secret = self.generateSharedSecret(privateKey, publicKey)
@@ -213,7 +225,10 @@ class E2EE:
                 isCompact=isCompact,
             )
         else:
-            chunks = self.encryptE2EETextMessage(
+            e2ee_enc = self.encryptE2EETextMessage
+            if isinstance(text, dict):
+                e2ee_enc = self.encryptE2EEMessageByData
+            chunks = e2ee_enc(
                 senderKeyId,
                 receiverKeyId,
                 keyData,
@@ -222,9 +237,10 @@ class E2EE:
                 to,
                 _from,
                 isCompact=isCompact,
+                contentType=contentType
             )
         return chunks
-
+    
     def encryptE2EETextMessage(
         self,
         senderKeyId,
@@ -235,10 +251,11 @@ class E2EE:
         to,
         _from,
         isCompact=False,
+        contentType=0
     ):
         salt = os.urandom(16)
         gcmKey = self.getSHA256Sum(keyData, salt, b"Key")
-        aad = self.generateAAD(to, _from, senderKeyId, receiverKeyId, specVersion, 0)
+        aad = self.generateAAD(to, _from, senderKeyId, receiverKeyId, specVersion, contentType)
         sign = os.urandom(16)
         data = json.dumps({"text": text}).encode()
         encData = self.encryptE2EEMessageV2(data, gcmKey, sign, aad)
@@ -268,6 +285,34 @@ class E2EE:
         aad = self.generateAAD(to, _from, senderKeyId, receiverKeyId, specVersion, 15)
         sign = os.urandom(16)
         data = json.dumps({"location": location}).encode()
+        encData = self.encryptE2EEMessageV2(data, gcmKey, sign, aad)
+        bSenderKeyId = bytes(self.getIntBytes(senderKeyId))
+        bReceiverKeyId = bytes(self.getIntBytes(receiverKeyId))
+        if isCompact:
+            compact = self.TCompactProtocol(self)
+            bSenderKeyId = bytes(compact.writeI32(int(senderKeyId)))
+            bReceiverKeyId = bytes(compact.writeI32(int(receiverKeyId)))
+        self.log(f"senderKeyId: {senderKeyId} ({bSenderKeyId})", True)
+        self.log(f"receiverKeyId: {receiverKeyId} ({bReceiverKeyId})", True)
+        return [salt, encData, sign, bSenderKeyId, bReceiverKeyId]
+
+    def encryptE2EEMessageByData(
+        self,
+        senderKeyId,
+        receiverKeyId,
+        keyData,
+        specVersion,
+        dict_data,
+        to,
+        _from,
+        isCompact=False,
+        contentType=0
+    ):
+        salt = os.urandom(16)
+        gcmKey = self.getSHA256Sum(keyData, salt, b"Key")
+        aad = self.generateAAD(to, _from, senderKeyId, receiverKeyId, specVersion, contentType)
+        sign = os.urandom(16)
+        data = json.dumps(dict_data).encode()
         encData = self.encryptE2EEMessageV2(data, gcmKey, sign, aad)
         bSenderKeyId = bytes(self.getIntBytes(senderKeyId))
         bReceiverKeyId = bytes(self.getIntBytes(receiverKeyId))
@@ -357,6 +402,43 @@ class E2EE:
             decrypted = self.decryptE2EEMessageV1(chunks, privK, pubK)
         return decrypted.get("location", None)
 
+    def decryptE2EEMessage(self, messageObj, isSelf=True) -> dict:
+        _from = self.checkAndGetValue(messageObj, "_from", 1)
+        to = self.checkAndGetValue(messageObj, "to", 2)
+        toType = self.checkAndGetValue(messageObj, "toType", 3)
+        metadata = self.checkAndGetValue(messageObj, "contentMetadata", 18)
+        specVersion = metadata.get("e2eeVersion", "2")
+        contentType = self.checkAndGetValue(messageObj, "contentType", 15)
+        chunks = self.checkAndGetValue(messageObj, "chunks", 20)
+        for i in range(len(chunks)):
+            if isinstance(chunks[i], str):
+                chunks[i] = chunks[i].encode()
+        senderKeyId = byte2int(chunks[3])
+        receiverKeyId = byte2int(chunks[4])
+        self.log(f"senderKeyId: {senderKeyId}", True)
+        self.log(f"receiverKeyId: {receiverKeyId}", True)
+
+        selfKey = self.getE2EESelfKeyData(self.mid)
+        privK = base64.b64decode(selfKey["privKey"])
+        if toType == 0:
+            pubK = self.getE2EELocalPublicKey(
+                to, receiverKeyId if isSelf else senderKeyId
+            )
+        else:
+            groupK = self.getE2EELocalPublicKey(to, receiverKeyId)
+            privK = base64.b64decode(groupK["privKey"])
+            pubK = base64.b64decode(selfKey["pubKey"])
+            if _from != self.mid:
+                pubK = self.getE2EELocalPublicKey(_from, senderKeyId)
+
+        if specVersion == "2":
+            decrypted = self.decryptE2EEMessageV2(
+                to, _from, chunks, privK, pubK, specVersion, contentType
+            )
+        else:
+            decrypted = self.decryptE2EEMessageV1(chunks, privK, pubK)
+        return decrypted
+
     def decryptE2EEMessageV1(self, chunks, privK, pubK):
         salt = chunks[0]
         message = chunks[1]
@@ -389,6 +471,44 @@ class E2EE:
         decrypted = aesgcm.decrypt(sign, message, aad)
         self.log(f"decrypted: {decrypted}", True)
         return json.loads(decrypted)
+    
+    def sign_data(self, data: bytes, key: bytes):
+        """Sign data by SHA256."""
+        hmac_key = hmac.HMAC(key, hashes.SHA256())
+        hmac_key.update(data)
+        return  hmac_key.finalize()
+    
+    def deriveKeyMaterial(self, key_material: bytes):
+        """Derive key material for file encryption."""
+        # 使用私鑰導入
+        t = HKDF(
+            algorithm=hashes.SHA256(),
+            length=32 + 32 + 12,
+            salt=None,
+            info=b"FileEncryption"
+        ).derive(key_material)
+
+        return {
+            "encKey": t[:32],
+            "macKey": t[32:64],
+            "nonce": t[64:]
+        }
+
+    def encryptByKeyMaterial(self, raw_data: Any, keyMateria: Optional[bytes] = None):
+        """Encrypt file for E2EE Next."""
+        if keyMateria is None:
+            keyMateria = secrets.token_bytes(32)
+        keys = self.deriveKeyMaterial(keyMateria)
+        enc_data = self._encryptAESCTR(keys['encKey'], keys['nonce'], raw_data)
+        sign = self.sign_data(enc_data, keys['macKey'])
+        return base64.b64encode(keyMateria).decode(), enc_data + sign
+
+    def decryptByKeyMaterial(self, raw_data: Any, keyMateria: Union[bytes, str]):
+        """Decrypt file for E2EE Next."""
+        if isinstance(keyMateria, str):
+            keyMateria = base64.b64decode(keyMateria)
+        keys = self.deriveKeyMaterial(keyMateria)
+        return self._decryptAESCTR(keys['encKey'], keys['nonce'], raw_data)
 
 
 def byte2int(t):

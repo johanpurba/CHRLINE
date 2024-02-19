@@ -8,6 +8,51 @@ import urllib
 import httpx
 
 
+def file_decoder(func):
+    def wrapper(*args, **kwargs):
+        pathOrBytes = None
+        raw_data = None
+        if len(args) > 1:
+            pathOrBytes = args[1]
+        elif "pathOrBytes" in kwargs:
+            pathOrBytes = kwargs["pathOrBytes"]
+        if isinstance(pathOrBytes, str):
+            if pathOrBytes.startswith("http"):
+                # URL
+                with httpx.Client() as hc:
+                    raw_data = hc.get(pathOrBytes).content
+            else:
+                # FILE
+                with open(pathOrBytes, "rb") as f:
+                    raw_data = f.read()
+        else:
+            # BYTES
+            raw_data = pathOrBytes
+        if "pathOrBytes" in kwargs:
+            kwargs["pathOrBytes"] = raw_data
+        else:
+            args_list = list(args)
+            args_list[1] = raw_data
+            args = tuple(args_list)
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+def media_type_check(func):
+    def wrapper(*args, **kwargs):
+        oType = None
+        if len(args) > 2:
+            oType = args[2]
+        elif "oType" in kwargs:
+            oType = kwargs["oType"]
+        if oType not in ["image", "gif", "video", "audio", "file"]:
+            raise TypeError(f"Invalid oType: {oType}")
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
 class Object(object):
     def __init__(self):
         self.Hraders4Obs = {
@@ -648,7 +693,7 @@ class Object(object):
             hr = self.server.additionalHeaders(
                 hr,
                 {
-                    "Content-Type": "image/gif",  # but...
+                    "Content-Type": "application/octet-stream",  # but...
                     "Content-Length": str(len(data)),
                     "X-Obs-Params": self.genOBSParams(params, "b64"),
                 },
@@ -818,3 +863,68 @@ class Object(object):
         if not self.checkRespIsSuccessWithLpv(r):
             raise Exception(f"saveTalkObject2Keep failure: {r.status_code}")
         return r.json()
+
+    @file_decoder
+    @media_type_check
+    def uploadMediaByE2EE(
+        self,
+        pathOrBytes,
+        oType="image",
+        to=None,
+    ):
+        typeSet = {
+            "image": ("emi", 1),
+            "video": ("emv", 2),
+            "audio": ("ema", 3),
+            "file": ("emf", 14),
+            "gif": ("emi", 1),
+        }
+        subresource = {
+            "preview": "ud-preview",
+            "hash": "ud-hash",
+        }
+        serviceName = "talk"
+        obsNamespace, contentType = typeSet[oType]
+        params = {"type": "file"}  # bin file
+        if oType == "gif":
+            params["cat"] = "original"
+        if to is not None:
+            if self.getToType(to) == 4:
+                raise NotImplementedError("Not support for Open Chat.")
+            ekm, efile = self.encryptByKeyMaterial(pathOrBytes)
+            tempId = "reqid-" + str(uuid.uuid4())
+            obsObjId, obsHash, respHeaders = self.uploadObjectForService(
+                efile,
+                "file",
+                f"{serviceName}/{obsNamespace}/{tempId}",
+                params=params,
+            )
+            obsObjId2, _, _ = self.uploadObjectForService(
+                efile,
+                "file",
+                f"{serviceName}/{obsNamespace}/{obsObjId}__" + subresource["preview"],
+                params={},
+            )  # upload preview img
+            assert obsObjId == obsObjId2
+            chunks = self.encryptE2EEMessage(to, {"keyMaterial": ekm}, contentType=1)
+            msg = self.sendMessage(
+                to,
+                None,
+                contentType,
+                {
+                    "SID": obsNamespace,
+                    "OID": obsObjId,
+                    "e2eeVersion": "2",
+                    "MEDIA_CONTENT_INFO": json.dumps(
+                        {
+                            "category": "original",
+                            "fileSize": len(efile),
+                            "extension": "jpg",
+                            "animated": oType == "gif",
+                        }
+                    ),
+                },
+                chunk=chunks,
+            )
+        else:
+            raise ValueError("`to` is required.")

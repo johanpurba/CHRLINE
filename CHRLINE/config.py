@@ -132,22 +132,32 @@ class Config(object):
 
     TOKEN_V3_SUPPORT = ["DESKTOPWIN", "DESKTOPMAC", "CHROMEOS"]
     SYNC_SUPPORT = ["IOS", "IOSIPAD", "ANDROID", "CHROMEOS"]
+    USERDOMAIN = "KORONE-MY-WAIFU"
+    SYSTEM_MODEL = "System Product Name"
+    MODEL_NAME = "System Product Name"
 
     def __init__(self, type="CHROME"):
         self.APP_NAME = None
         self.DEVICE_TYPE = type
         self.isSecondary = False
         if type == "DESKTOPWIN":
-            self.APP_VER = "7.16.1.3000"
+            self.APP_VER = "8.6.0.3277"
             self.SYSTEM_NAME = "WINDOWS"
             self.SYSTEM_VER = "10.0.0-NT-x64"
+            self.SYSTEM_MODEL = self.USERDOMAIN
         elif type == "DESKTOPMAC":
-            self.APP_VER = "7.16.1.3000"
+            self.APP_VER = "8.1.1.3145"
             self.SYSTEM_NAME = "MAC"
+            self.SYSTEM_MODEL = self.USERDOMAIN
         elif type == "CHROMEOS":
-            self.APP_VER = "3.0.3"
+            # if you got timeout, just mean version too low.
+            # DON'T ask more.
+            self.APP_VER = "3.1.0"
             self.SYSTEM_NAME = "Chrome_OS"  # for TokenV3.1
             self.SYSTEM_VER = "1"
+            self.USERDOMAIN = "CHROMEOS"
+            self.SYSTEM_MODEL = "Chrome" if True else "Whale"
+            self.MODEL_NAME = "CHROME"
         # elif type == "ANDROIDLITE":
         # self.APP_VER = "2.17.1"
         # self.SYSTEM_NAME = "Android OS"
@@ -156,13 +166,14 @@ class Config(object):
             self.APP_VER = "13.4.1"
             self.SYSTEM_NAME = "Android OS"
         elif type == "IOS":
-            self.APP_VER = "13.3.0"
+            self.APP_VER = "13.11.0"
             self.SYSTEM_NAME = "iOS"
         elif type == "IOSIPAD":
-            self.APP_VER = "13.3.0"
-            self.SYSTEM_NAME = "iOS"
+            self.APP_VER = "13.11.0"
+            self.SYSTEM_NAME = "iPadOS"
+            self.SYSTEM_MODEL = "iPad5,1"
         elif type == "WATCHOS":
-            self.APP_VER = "13.3.0"
+            self.APP_VER = "13.11.0"
             self.SYSTEM_NAME = "Watch OS"
         elif type == "WEAROS":
             self.APP_VER = "13.4.1"
@@ -210,7 +221,8 @@ class Config(object):
         self.APP_TYPE = type
         self.USER_AGENT = "Line/%s" % self.APP_VER
 
-    def initAppConfig(self, app_type, app_version, os_name, os_version):
+    def initAppConfig(self, app_type: str, app_version: str, os_name: str, os_version: str, os_model: str):
+        """Init app config."""
         self.APP_TYPE = "CHROMEOS"
         if app_type is not None:
             self.APP_TYPE = app_type
@@ -220,6 +232,8 @@ class Config(object):
             self.SYSTEM_NAME = os_name
         if os_version is not None:
             self.SYSTEM_VER = os_version
+        if os_model is not None:
+            self.SYSTEM_MODEL = os_model
         self.APP_NAME = "%s\t%s\t%s\t%s" % (
             self.APP_TYPE,
             self.APP_VER,
@@ -228,3 +242,16 @@ class Config(object):
         )
         if self.isSecondary:
             self.APP_NAME += ";SECONDARY"
+    
+    @property
+    def LineUserAgent(self):
+        if self.APP_TYPE == "CHROMEOS":
+            self.USER_AGENT = "Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+        elif self.APP_TYPE in ["DESKTOPWIN", "DESKTOPMAC"]:
+            _desktop = "MAC"
+            if self.APP_TYPE == "DESKTOPWIN":
+                _desktop = "WINDOWS"
+            self.USER_AGENT = f"DESKTOP:{_desktop}:{self.SYSTEM_NAME}({self.SYSTEM_VER})"
+        else:
+            self.USER_AGENT = f"Line/{self.APP_VER} {self.SYSTEM_MODEL} {self.SYSTEM_VER}"
+        return self.USER_AGENT
